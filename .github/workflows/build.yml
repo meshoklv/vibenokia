@@ -1,0 +1,30 @@
+name: build
+on:
+  push:
+    branches: [main]
+  pull_request:
+jobs:
+  server:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with: {python-version: "3.12"}
+      - run: pip install -r server/requirements.txt
+      - run: python -m py_compile server/nokia_api.py tools/devices.py tools/phone_emu.py
+  j2me:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build client
+        run: docker run --rm -v "$PWD/client:/workspace" ghcr.io/mgruszkiewicz/docker-j2me-build:latest make build SERVER_URL=http://example.invalid:8085
+      - name: Build and verify games
+        run: |
+          docker run --rm -v "$PWD/games:/workspace" ghcr.io/mgruszkiewicz/docker-j2me-build:latest sh build.sh
+          python3 games/tools/verify.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: jars
+          path: |
+            client/dist/*
+            games/dist/*

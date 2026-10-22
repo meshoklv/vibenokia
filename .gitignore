@@ -1,0 +1,12 @@
+.env
+*.env
+!.env.example
+data/
+client/build/
+client/dist/
+games/build/
+games/tmp/
+games/dist/
+__pycache__/
+*.pyc
+.DS_Store

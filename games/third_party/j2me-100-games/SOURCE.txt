@@ -1,0 +1,3 @@
+https://github.com/agneay/j2me-100-games  commit a81f2c5e0396baac10928ff012bbf9d8a2d787e3
+Licence: MIT (see LICENSE). 32 games copied into games/src/*, plus common/src/gamekit.
+Local change: gamekit/Sfx.java -> `on = false` by default (silent unless toggled in menu).

@@ -1,0 +1,15 @@
+# VibeNokia server. The port is published on the host's loopback ONLY.
+# To let the phone in, put a reverse proxy in front (see docs/deployment.md).
+services:
+  server:
+    build: ./server
+    restart: unless-stopped
+    user: "${VIBE_UID:-1000}:${VIBE_GID:-1000}"   # so ./data is writable (set by scripts/quickstart.sh)
+    env_file: .env
+    ports:
+      - "127.0.0.1:8085:8085"
+    volumes:
+      - ./data:/app/data                 # database, pairing code, working dir
+      - ./data/claude-home:/home/vibe    # Claude Code login state (if you use `claude login`)
+      - ./client/dist:/app/ota:ro        # Snake.jar / Snake.jad for over-the-air install
+      - ./games/dist:/app/games:ro       # optional game catalogue
