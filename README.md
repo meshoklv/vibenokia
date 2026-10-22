@@ -10,6 +10,7 @@
 </p>
 
 <p align="center">
+  <img alt="CI" src="https://img.shields.io/github/actions/workflow/status/meshoklv/vibenokia/build.yml?style=flat-square">
   <img alt="License" src="https://img.shields.io/github/license/meshoklv/vibenokia?style=flat-square">
   <img alt="Platform" src="https://img.shields.io/badge/platform-Nokia%203310%20%C2%B7%20J2ME-blue?style=flat-square">
   <img alt="Server" src="https://img.shields.io/badge/server-Python%203.12%20%C2%B7%20FastAPI-green?style=flat-square">
