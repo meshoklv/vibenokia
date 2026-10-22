@@ -79,7 +79,7 @@ def _safe_path(path):
     """Path for the log: without query, without the key from /ota/<key>/... and /g/<key>/...,
     without control characters."""
     path = (path or "").split("?", 1)[0]
-    if _PATH_KEY_RE.match(path) and not path.startswith(("/ota/Snake.", "/ota/NokiaClaude.")):
+    if _PATH_KEY_RE.match(path) and not path.startswith(("/ota/VibeNokia.",)):
         path = _PATH_KEY_RE.sub(lambda m: "/%s/***%s" % (m.group(1), m.group(2)), path)
     return re.sub(r"[\x00-\x1f\x7f]", "", path)[:80]
 
@@ -369,6 +369,10 @@ async def check_api_key(request: Request, call_next):
         # A valid signature does NOT lift the ban on the ADDRESS (it may be deserved: a scanner
         # behind the same relay); only the device's miss counter is reset.
         _fail_counts.pop(dev, None)
+        for _pfx, _feat in FEATURE_ROUTES.items():
+            if path.startswith(_pfx) and _feat not in FEATURES:
+                _access_log(request.method, path, 404, t0, dev, ip)
+                return JSONResponse(status_code=404, content={"error": "feature_off"})
         if MODE == "tg" and path.startswith(CLAUDE_ROUTES):
             _access_log(request.method, path, 404, t0, dev, ip)
             return JSONResponse(status_code=404, content={"error": "not_found"})
@@ -433,7 +437,7 @@ STT_PROMPT = (
 # the CURRENT generation (opus->Opus 5, etc.), so they do not go stale like a pinned id.
 MODEL_MAP = {"opus": "opus", "sonnet": "sonnet", "haiku": "haiku"}
 
-APP_VERSION = "2.6.4"
+APP_VERSION = "2.7.0"
 OTA_DIR = os.getenv("VIBENOKIA_OTA_DIR", os.path.join(BASE_DIR, "ota"))
 # Game catalog: the same JAR/JAD files that are put on the memory card, but installed
 GAMES_DIR = os.getenv("VIBENOKIA_GAMES_DIR", os.path.join(BASE_DIR, "games"))
@@ -742,6 +746,19 @@ CLAUDE_EXTRA_ARGS = shlex.split(os.getenv("VIBENOKIA_CLAUDE_ARGS", ""))
 # opencode config; enable with VIBENOKIA_OPENCODE=1 only if you accept that. ---
 OPENCODE_ENABLED = os.getenv("VIBENOKIA_OPENCODE", "0").strip() in ("1", "true", "yes", "on")
 OPENCODE_CMD = os.getenv("VIBENOKIA_OPENCODE_CMD", "opencode").split()
+
+# --- Features offered to phones ---
+# The phone app starts as a simple Claude chat + Settings and lets the user switch the
+# rest on (Settings > Features). This list is the server-side CEILING: a feature missing
+# here is hidden in the app and its API routes answer 404. The phone learns the list from /ping.
+ALL_FEATURES = ("telegram", "opencode", "sessions", "voice", "advanced")
+_feat_env = os.getenv("VIBENOKIA_FEATURES", "").strip().lower()
+FEATURES = tuple(f for f in ALL_FEATURES
+                 if (f in [x.strip() for x in _feat_env.split(",")] if _feat_env else True))
+if not OPENCODE_ENABLED:
+    FEATURES = tuple(f for f in FEATURES if f != "opencode")   # nothing to offer without the runner
+# route prefix -> feature that gates it
+FEATURE_ROUTES = {"/api/tg": "telegram", "/api/voice": "voice"}
 
 _VIBE_CTRL = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")   # control chars never go into argv
 
@@ -1792,7 +1809,8 @@ async def ping():
         _unread_cache["ts"] = now
 
     out = {"status": "ok", "mode": MODE, "version": APP_VERSION,
-           "unread": _unread_cache["n"], "time": int(time.time())}
+           "unread": _unread_cache["n"], "time": int(time.time()),
+           "features": ",".join(FEATURES)}
     if _unread_cache["n"] > 0 and _unread_cache["last_id"]:
         out["last_id"] = _unread_cache["last_id"]
         out["last_chat"] = _unread_cache["last_chat"]
@@ -2220,18 +2238,11 @@ def _ota_base(request):
         pass
     return OTA_BASE_URL
 
-# --- OTA: serving Snake.jar/jad (the client is disguised as Snake) ---
-# The old /ota/NokiaClaude.* paths are kept as aliases to the SAME files, so that
-# an already installed copy does not hit 404 but gets the installer.
-# IMPORTANT, what this is NOT: the phone identifies an application by the pair
-# MIDlet-Name + MIDlet-Vendor, and it has changed (NokiaClaude/VibeNokia ->
-# Snake/Mobile Apps). So an old copy will install Snake as a SECOND application,
-# stay in place and keep offering an "update".
-# This is the migration path: install Snake, then delete the old icon.
+# --- OTA: serving VibeNokia.jar/jad ---
 
 @app.get("/api/update")
 async def check_update(request: Request):
-    jar_path = os.path.join(OTA_DIR, "Snake.jar")
+    jar_path = os.path.join(OTA_DIR, "VibeNokia.jar")
     jar_size = os.path.getsize(jar_path) if os.path.exists(jar_path) else 0
     if jar_size == 0:
         return JSONResponse(status_code=404, content={"error": "jar_missing"})
@@ -2240,25 +2251,25 @@ async def check_update(request: Request):
     # stacks (and the Opera Mini proxy) stumble on ?k=...
     return JSONResponse(content={
         "version": APP_VERSION,
-        "jad_url": f"{base}/ota/Snake.jad",
-        "jar_url": f"{base}/ota/Snake.jar",
+        "jad_url": f"{base}/ota/VibeNokia.jad",
+        "jar_url": f"{base}/ota/VibeNokia.jar",
         "jar_size": jar_size
     })
 
 def _jad_text(base=None):
-    # Manifest 1:1 as in client/Makefile (Snake / vibenokia.SnakeMIDlet),
+    # Manifest 1:1 as in client/Makefile (VibeNokia / vibenokia.VibeNokiaMIDlet),
     # otherwise the installer sees a foreign suite and installs a second application.
-    jar_path = os.path.join(OTA_DIR, "Snake.jar")
+    jar_path = os.path.join(OTA_DIR, "VibeNokia.jar")
     jar_size = os.path.getsize(jar_path) if os.path.exists(jar_path) else 0
-    return f"""MIDlet-Name: Snake
+    return f"""MIDlet-Name: VibeNokia
 MIDlet-Version: {APP_VERSION}
-MIDlet-Vendor: Mobile Apps
-MIDlet-Description: Classic snake game
+MIDlet-Vendor: VibeNokia
+MIDlet-Description: Claude terminal for feature phones
 MIDlet-Icon: /vibenokia/icon.png
-MIDlet-1: Snake,/vibenokia/icon.png,vibenokia.SnakeMIDlet
+MIDlet-1: VibeNokia,/vibenokia/icon.png,vibenokia.VibeNokiaMIDlet
 MicroEdition-Configuration: CLDC-1.1
 MicroEdition-Profile: MIDP-2.0
-MIDlet-Jar-URL: {base or OTA_BASE_URL}/ota/Snake.jar
+MIDlet-Jar-URL: {base or OTA_BASE_URL}/ota/VibeNokia.jar
 MIDlet-Jar-Size: {jar_size}
 MIDlet-Permissions: javax.microedition.io.Connector.http, javax.microedition.io.Connector.file.read, javax.microedition.media.control.RecordControl
 """
@@ -2272,7 +2283,7 @@ def _jad_response(head=False, base=None):
     return Response(content=b"" if head else body.encode("utf-8"), headers=headers)
 
 def _jar_response(head=False):
-    jar_path = os.path.join(OTA_DIR, "Snake.jar")
+    jar_path = os.path.join(OTA_DIR, "VibeNokia.jar")
     if not os.path.exists(jar_path):
         return JSONResponse(status_code=404, content={"error": "JAR not found"})
     with open(jar_path, "rb") as f:
@@ -2285,21 +2296,21 @@ def _jar_response(head=False):
 
 # HEAD is supported explicitly: phones/proxies often send HEAD first, and a 405 means a hang.
 # Two kinds of paths: the old ?k=... and the clean /ota/<key>/... without a query string.
-@app.api_route("/ota/Snake.jad", methods=["GET", "HEAD"])
+@app.api_route("/ota/VibeNokia.jad", methods=["GET", "HEAD"])
 async def ota_jad(request: Request):
     return _jad_response(head=request.method == "HEAD", base=_ota_base(request))
 
-@app.api_route("/ota/Snake.jar", methods=["GET", "HEAD"])
+@app.api_route("/ota/VibeNokia.jar", methods=["GET", "HEAD"])
 async def ota_jar(request: Request):
     return _jar_response(head=request.method == "HEAD")
 
-@app.api_route("/ota/{key}/Snake.jad", methods=["GET", "HEAD"])
+@app.api_route("/ota/{key}/VibeNokia.jad", methods=["GET", "HEAD"])
 async def ota_jad_pathkey(key: str, request: Request):
     if not _key_eq(key, API_KEY):
         return JSONResponse(status_code=403, content={"error": "forbidden"})
     return _jad_response(head=request.method == "HEAD", base=_ota_base(request))
 
-@app.api_route("/ota/{key}/Snake.jar", methods=["GET", "HEAD"])
+@app.api_route("/ota/{key}/VibeNokia.jar", methods=["GET", "HEAD"])
 async def ota_jar_pathkey(key: str, request: Request):
     if not _key_eq(key, API_KEY):
         return JSONResponse(status_code=403, content={"error": "forbidden"})

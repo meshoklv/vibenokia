@@ -36,7 +36,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 
-UA = "Snake/2.6"
+UA = "VibeNokia/2.7"
 
 
 def sign_headers(dev, secret, method, path, cnt, body, host):

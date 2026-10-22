@@ -40,7 +40,6 @@ public class TerminalCanvas extends Canvas {
     private int voiceState = VOICE_NONE;
     private int recordSeconds = 0;
     private boolean starHeld = false;
-    private boolean panicFired = false;   // held 0 has already fired (once per hold)
 
     // Spinner (animated, shown in prompt area only)
     private boolean spinnerActive = false;
@@ -61,9 +60,9 @@ public class TerminalCanvas extends Canvas {
         if (n != unreadCount) { unreadCount = n; repaint(); }
     }
 
-    private SnakeMIDlet midlet;
+    private VibeNokiaMIDlet midlet;
 
-    public TerminalCanvas(SnakeMIDlet midlet) {
+    public TerminalCanvas(VibeNokiaMIDlet midlet) {
         this.midlet = midlet;
         setFullScreenMode(true);
         lines = new Vector();
@@ -324,7 +323,6 @@ public class TerminalCanvas extends Canvas {
             return;
         }
         if (keyCode == KEY_NUM0) {
-            panicFired = false;   // a new press re-arms panic
             scrollOffset = Math.max(0, scrollOffset - visibleLines);
             repaint();
             return;
@@ -387,13 +385,6 @@ public class TerminalCanvas extends Canvas {
     protected void keyRepeated(int keyCode) {
         if (showSplash) return;
 
-        // HELD 0 is panic: instantly to the game from any terminal state
-        // (active request, voice recording, Telegram chat). Once per hold;
-        // a short 0 (page up) is handled in keyPressed and is not touched.
-        if (keyCode == KEY_NUM0) {
-            if (!panicFired) { panicFired = true; midlet.onPanicHold(); }
-            return;
-        }
 
         if (keyCode == KEY_NUM2 || getGameAction(keyCode) == UP) {
             if (scrollOffset > 0) { scrollOffset--; repaint(); }
@@ -409,15 +400,10 @@ public class TerminalCanvas extends Canvas {
         }
     }
 
-    protected void keyReleased(int keyCode) {
-        // releasing 0 clears the repeat block (if the event reaches here)
-        if (keyCode == KEY_NUM0) panicFired = false;
-    }
 
-    /** Reset transient input states (panic): star, voice, spinner. */
+    /** Reset transient input states (cancel): star, voice, spinner. */
     public void resetTransient() {
         starHeld = false;
-        panicFired = false;
         voiceState = VOICE_NONE;
         recordSeconds = 0;
         stopSpinner();

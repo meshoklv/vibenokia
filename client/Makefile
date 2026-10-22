@@ -3,15 +3,14 @@
 #   make SERVER_URL=http://my.server.example:8085   # build via Docker (no local J2ME SDK needed)
 #   make build SERVER_URL=...                       # build inside the j2me-build image / any machine with WTK
 #
-# Output: dist/Snake.jar + dist/Snake.jad (the app ships under a neutral "Snake" name,
-# see README "Stealth mode"). SERVER_URL is baked in as the default server address;
+# Output: dist/VibeNokia.jar + dist/VibeNokia.jad. SERVER_URL is baked in as the default server address;
 # it can also be changed on the phone later (Menu > Settings > Servers).
 
-PROJECT_NAME = Snake
-VERSION = 2.6.4
-MIDLET_CLASS = vibenokia.SnakeMIDlet
-MIDLET_VENDOR = Mobile Apps
-MIDLET_DESC = Classic snake game
+PROJECT_NAME = VibeNokia
+VERSION = 2.7.0
+MIDLET_CLASS = vibenokia.VibeNokiaMIDlet
+MIDLET_VENDOR = VibeNokia
+MIDLET_DESC = Claude terminal for feature phones
 SRC_DIR = src
 BUILD_DIR = build
 DIST_DIR = dist
@@ -46,7 +45,7 @@ build:
 	@rm -rf $(BUILD_DIR)
 	@mkdir -p $(BUILD_DIR)/src $(BUILD_DIR)/classes $(BUILD_DIR)/preverified $(BUILD_DIR)/mf $(DIST_DIR)
 	@cp -r $(SRC_DIR)/vibenokia $(BUILD_DIR)/src/
-	@sed -i.bak 's|$(PLACEHOLDER_URL)|$(SERVER_URL)|g' $(BUILD_DIR)/src/vibenokia/SnakeMIDlet.java
+	@sed -i.bak 's|$(PLACEHOLDER_URL)|$(SERVER_URL)|g' $(BUILD_DIR)/src/vibenokia/VibeNokiaMIDlet.java
 	@rm -f $(BUILD_DIR)/src/vibenokia/*.bak
 	$(JAVA_HOME)/bin/javac -bootclasspath $(CLASSPATH) -encoding UTF-8 -source 1.3 -target 1.3 \
 		-d $(BUILD_DIR)/classes $$(ls $(BUILD_DIR)/src/vibenokia/*.java)

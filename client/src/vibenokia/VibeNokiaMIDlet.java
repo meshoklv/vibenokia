@@ -11,12 +11,12 @@ import java.util.TimerTask;
 import java.util.Vector;
 import javax.microedition.rms.*;
 
-public class SnakeMIDlet extends MIDlet implements CommandListener {
+public class VibeNokiaMIDlet extends MIDlet implements CommandListener {
     private Display display;
 
     private TerminalCanvas terminal;
-    private InputCanvas inputCanvas;     // text input directly on a Canvas: Form does not deliver keyRepeated (panic on 0)
-    private MenuCanvas settingsMenu;     // settings are on a Canvas too: Form has no keyRepeated -> no panic
+    private InputCanvas inputCanvas;     // text input directly on a Canvas: Form does not deliver keyRepeated (cancel on 0)
+    private MenuCanvas settingsMenu;     // settings are on a Canvas too: Form has no keyRepeated -> no cancel
     private MenuCanvas sessionsList;
     private MenuCanvas menuList;
 
@@ -112,10 +112,9 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
     private String[] tgLabels;
     private MenuCanvas tgList;
 
-    static final String APP_VERSION = "2.6.4";   // package-private: read by HomeCanvas
-    // Neutral User-Agent: the real application name is not exposed on the network.
+    static final String APP_VERSION = "2.7.0";   // package-private: read by HomeCanvas
     // The server does not check the UA (it only logs its own in outgoing requests); relays are plain TCP.
-    private static final String USER_AGENT = "Snake/2.6";
+    private static final String USER_AGENT = "VibeNokia/2.7";
     // There is NO key in the application anymore. The phone is paired once with a
     // code and receives its own key, which lives in phone memory; every
     // request is signed with it (DeviceAuth). A leaked build gives nothing.
@@ -139,35 +138,30 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
     private String ocDefault = "opencode/big-pickle";
 
     private boolean started = false;
-    private boolean unlocked = false;    // mask lifted in this session
+    private boolean active = false;      // true while the app is running; background workers check it
     private boolean netBooted = false;   // network start already done (exactly once)
-    private SnakeCanvas snake;           // mask: the game on the first screen
 
     public void startApp() {
         display = Display.getDisplay(this);
         // startApp is also called on RETURN from a call/background - do not recreate everything,
         // otherwise the chat is erased and ping timers multiply with every call
         if (started) {
-            if (!unlocked) {
-                // mask not lifted yet: the game again, nothing is woken from background
-                display.setCurrent(snake);
-                return;
-            }
             // goHome rather than a bare setCurrent: it resets tgMode - otherwise after a call
             // the ping would quietly "read" the open Telegram chat and swallow unread messages
             goHome();
-            if (pingTimer == null) startPingTimer();
+            if (pingTimer == null && DeviceAuth.isPaired()) startPingTimer();
             return;
         }
         started = true;
+        active = true;
         loadSettings();
+        loadFeatures();
         loadNetState();    // BEFORE loadServers: it needs the one-time "Claude-2" migration flag
         loadServers();
         buildCommands();
         initUI();
         if (fontSize != 0) terminal.setFontSize(fontSize);
-        // The first screen is always the game. Real functionality comes alive in onSnakeUnlock().
-        display.setCurrent(snake);
+        startSession();
     }
 
     public void pauseApp() {
@@ -177,6 +171,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
     }
 
     public void destroyApp(boolean unconditional) {
+        active = false;
         if (pingTimer != null) { pingTimer.cancel(); pingTimer = null; }
         stopRecording(false);
         closePlayer();
@@ -214,8 +209,8 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
 
     /** One background ping tick. Holds the connection for at most ONE timeout. */
     private void pingTick() {
-        if (!unlocked) return;   // panic: the timer may not have been cancelled in time - stay silent
-        final int myEpoch = reqEpoch;   // epoch at tick start: panic in the middle of the network call silences the vibrations below
+        if (!active) return;   // cancel: the timer may not have been cancelled in time - stay silent
+        final int myEpoch = reqEpoch;   // epoch at tick start: cancel in the middle of the network call silences the vibrations below
         // do not take the single HTTP connection from a request or a background Telegram refresh
         if (isLoading || autoRefreshing) return;
         // In the Telegram chat, pull new messages ourselves every ~15 s
@@ -233,7 +228,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
         // On the home screen alternate BOTH roles - otherwise the "Claude" dot at the bottom is dead.
         // No TG slot (tgU empty) - ping only Claude.
         String tgU = tgServerUrl();
-        boolean hasTg = tgU.length() > 0;
+        boolean hasTg = tgU.length() > 0 && Features.on(Features.TELEGRAM);
         String fullU = fullServerUrl();
         String secU = (activePanel == PANEL_TG && hasTg) ? tgU : fullU;
         boolean askTg = hasTg && ((pingFlip++ % 2 == 0) || secU.equals(tgU));
@@ -263,7 +258,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
         try {
             code = probePing(probeUrl, body);
             aborted = pingAborted;  // aborted by a user request - this is not "server is silent"
-            if (isFull && !aborted && myEpoch == reqEpoch && unlocked) {
+            if (isFull && !aborted && myEpoch == reqEpoch && active) {
                 fullDown = (code != 200);   // any responding Claude address = ping often again
                 if (searching) {
                     if (code == 200) {
@@ -283,8 +278,8 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
         } finally {
             endPing();
         }
-        // panic/new request during the ping - the result is stale, do not touch the screen
-        if (aborted || !unlocked || myEpoch != reqEpoch) return;
+        // cancel/new request during the ping - the result is stale, do not touch the screen
+        if (aborted || !active || myEpoch != reqEpoch) return;
         boolean ok = searching ? (switched != null) : (code == 200);
         String json = body[0] != null ? body[0] : "";
         String answered = switched != null ? switched : target;
@@ -296,6 +291,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
             String m = extractField(json, "mode");
             if (m != null) serverMode = m;
         }
+        if (ok) applyServerFeatures(json);
         if (switched != null) noteFullSwitch(switched);
         if (askTg && ok) handleTgPing(json, myEpoch); // unread/preview - only from the TG role
     }
@@ -312,9 +308,9 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
 
     /** unread/preview from the TG role ping: home tile, vibration, a line in the chat. */
     private void handleTgPing(String json, int myEpoch) {
-        // The worker may have started before panic/*: without a current mask neither vibration
-        // nor terminal lines - otherwise the phone looks like a sleeping snake
-        if (!unlocked || myEpoch != reqEpoch) return;
+        // The worker may have started before the request was cancelled: no vibration
+        // and no terminal lines for a stale result
+        if (!active || myEpoch != reqEpoch) return;
         int u = extractInt(json, "unread");
         if (u < 0) return;
         int lid = extractInt(json, "last_id");
@@ -392,7 +388,6 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
     }
 
     private void initUI() {
-        snake = new SnakeCanvas(this);
         home = new HomeCanvas(this);
         homeOpenCmd = new Command(Strings.switchTo(), Command.OK, 1);
         homeExitCmd = new Command(Strings.exit(), Command.EXIT, 2);
@@ -405,7 +400,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
         terminal.setCommandListener(this);
 
         // Text input is on a Canvas (multitap): keyRepeated arrives, a held 0
-        // works as panic even in the middle of typing
+        // works as cancel even in the middle of typing
         inputCanvas = new InputCanvas(this, inputHistory);
 
         rebuildSettingsMenu();
@@ -416,13 +411,112 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
     private void showSettingsHub() {
         settingsHub = new MenuCanvas(this, Strings.settingsFull());
         settingsHub.append(Strings.params());
-        settingsHub.append(Strings.servers());
-        settingsHub.append(Strings.update());
+        settingsHub.append(Strings.features());
+        if (Features.on(Features.ADVANCED)) {
+            settingsHub.append(Strings.servers());
+            settingsHub.append(Strings.update());
+        }
         settingsHub.setSelectCommand(openItemCmd);
         settingsHub.addCommand(openItemCmd);
         settingsHub.addCommand(backCmd);
         settingsHub.setCommandListener(this);
         display.setCurrent(settingsHub);
+    }
+
+    // --- FEATURES (Settings > Features): what the simple menu hides ---
+
+    private MenuCanvas featuresMenu;
+    private int tmpFeat = 0;
+    private int[] featBits;      // bit of each row (rows the server forbids are not listed)
+
+    private void showFeaturesMenu() {
+        tmpFeat = Features.local;
+        featuresMenu = new MenuCanvas(this, Strings.features());
+        int[] bits = { Features.TELEGRAM, Features.OPENCODE, Features.SESSIONS, Features.VOICE, Features.ADVANCED };
+        featBits = bits;
+        for (int i = 0; i < bits.length; i++) featuresMenu.append("");
+        refreshFeatureRows();
+        featuresMenu.setSelectCommand(cycleCmd);
+        featuresMenu.addCommand(cycleCmd);
+        featuresMenu.addCommand(saveCmd);
+        featuresMenu.addCommand(backCmd);
+        featuresMenu.setCommandListener(this);
+        display.setCurrent(featuresMenu);
+    }
+
+    private void refreshFeatureRows() {
+        for (int i = 0; i < featBits.length; i++) {
+            int bit = featBits[i];
+            String row;
+            if ((Features.server & bit) == 0) row = "[-] " + Features.label(bit) + " (" + Strings.featServerOff() + ")";
+            else row = ((tmpFeat & bit) != 0 ? "[x] " : "[ ] ") + Features.label(bit);
+            featuresMenu.set(i, row);
+        }
+        featuresMenu.repaint();
+    }
+
+    private void toggleFeature(int row) {
+        if (row < 0 || row >= featBits.length) return;
+        int bit = featBits[row];
+        if ((Features.server & bit) == 0) return;   // the server does not offer it
+        tmpFeat ^= bit;
+        refreshFeatureRows();
+    }
+
+    private void saveFeatures() {
+        Features.local = tmpFeat & Features.ALL;
+        persistFeatures();
+        refreshHomeTiles();
+        showSettingsHub();
+    }
+
+    /** The server's list of allowed features (the "features" field of /ping); absent = all allowed. */
+    private void applyServerFeatures(String json) {
+        String f = extractField(json, "features");
+        if (f == null) return;
+        int m = Features.parseServer(f);
+        if (m != Features.server) {
+            Features.server = m;
+            refreshHomeTiles();
+        }
+    }
+
+    private void loadFeatures() {
+        boolean haveOldSettings = false;
+        try {
+            RecordStore o = RecordStore.openRecordStore("settings", false);
+            o.closeRecordStore();
+            haveOldSettings = true;
+        } catch (Exception e) {}
+        boolean found = false;
+        try {
+            RecordStore rs = RecordStore.openRecordStore("features", false);
+            byte[] d = rs.getRecord(1);
+            rs.closeRecordStore();
+            Features.local = Integer.parseInt(new String(d, "UTF-8")) & Features.ALL;
+            found = true;
+        } catch (Exception e) {}
+        if (!found) {
+            // A fresh install gets the simple menu; an upgrade from a version that
+            // had no Features keeps everything it already showed.
+            Features.local = haveOldSettings ? Features.ALL : Features.DEFAULT;
+            persistFeatures();
+        }
+    }
+
+    private void persistFeatures() {
+        try {
+            byte[] data = String.valueOf(Features.local).getBytes("UTF-8");
+            try {
+                RecordStore rs = RecordStore.openRecordStore("features", false);
+                rs.setRecord(1, data, 0, data.length);
+                rs.closeRecordStore();
+            } catch (RecordStoreNotFoundException e) {
+                RecordStore rs = RecordStore.openRecordStore("features", true);
+                rs.addRecord(data, 0, data.length);
+                rs.closeRecordStore();
+            }
+        } catch (Exception e) {}
     }
 
     /** Settings: a list on a Canvas - OK cycles the row value, "Save" applies. */
@@ -524,11 +618,11 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
         for (int i = 0; i < cands.length; i++) {
             String c = cands[i];
             if (c.equals(dead)) continue;
-            // panic, a new request or the user started typing - do not hold the air
-            if (!unlocked || myEpoch != reqEpoch || isLoading || pingAborted) return null;
+            // cancel, a new request or the user started typing - do not hold the air
+            if (!active || myEpoch != reqEpoch || isLoading || pingAborted) return null;
             String[] b = new String[1];
             if (probePing(c, b) == 200) {
-                if (!unlocked || myEpoch != reqEpoch) return null;
+                if (!active || myEpoch != reqEpoch) return null;
                 if (adoptFullUrl(c, dead)) { body[0] = b[0]; return c; }
                 return null;   // the address was changed manually in the meantime - do not argue
             }
@@ -559,9 +653,9 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
         return true;
     }
 
-    /** Claude auto-switch: a line in the open Claude/OpenCode chat (not in TG, not under the mask). */
+    /** Claude auto-switch: a line in the open Claude/OpenCode chat (not in TG, and only while the app is running). */
     private void noteFullSwitch(String url) {
-        if (!unlocked || tgMode || display.getCurrent() != terminal) return;
+        if (!active || tgMode || display.getCurrent() != terminal) return;
         if (chatOwner != PANEL_CLAUDE && chatOwner != PANEL_OC) return;
         String name = url;
         for (int i = 0; i < serverUrls.length; i++)
@@ -691,7 +785,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
 
     /** Opening a tile from the home screen. */
     public void onHomeOpen(int tile) {
-        if (isLoading) return;
+        if (isLoading || !home.hasTile(tile)) return;
         switch (tile) {
             case HomeCanvas.TILE_TG:       openTelegramPanel(); break;
             case HomeCanvas.TILE_CLAUDE:   openChatPanel(PANEL_CLAUDE); break;
@@ -731,7 +825,8 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
             terminal.clear();
             terminal.addLine("", TerminalCanvas.COLOR_DIM);
             terminal.addLine(" " + Strings.welcome1(), TerminalCanvas.COLOR_DIM);
-            terminal.addLine(" " + Strings.welcome2(), TerminalCanvas.COLOR_DIM);
+            if (Features.on(Features.VOICE))
+                terminal.addLine(" " + Strings.welcome2(), TerminalCanvas.COLOR_DIM);
             terminal.addLine(" " + Strings.welcome3(), TerminalCanvas.COLOR_DIM);
             terminal.addLine(" " + Strings.help6(), TerminalCanvas.COLOR_DIM);
             terminal.addLine("", TerminalCanvas.COLOR_DIM);
@@ -766,6 +861,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
 
     /** Tile labels from the current state. */
     private void refreshHomeTiles() {
+        home.setTiles(Features.local & Features.server);
         home.setClaudeSub(labelFor(claudeModel));
         home.setOcSub(labelFor(ocModel));
         updateHomeTg(tgUnread, lastTgFrom, null);
@@ -789,8 +885,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
     public void onHomeHelp() {
         home.showOverlay(Strings.helpTitle(), new String[] {
             Strings.homeHelp1(), Strings.homeHelp2(), Strings.homeHelp3(),
-            Strings.homeHelp4(), Strings.help2(), Strings.help5(),
-            Strings.homeHelp5() });
+            Strings.homeHelp4(), Strings.help5() });
     }
 
     public void onHomeAbout() {
@@ -804,9 +899,8 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
 
     public void onHomePingNow() { pingFlip = 0; }
 
-    /** From the game: the sequence was entered correctly - reveal the application. */
-    public void onSnakeUnlock() {
-        unlocked = true;
+    /** First screen after launch: the home menu, then pairing (once) or the network start. */
+    private void startSession() {
         goHome();
         refreshHomeTiles();
         // Pairing is asked ONLY while the phone has no key. Once it appears -
@@ -821,7 +915,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
         bootNetwork();
     }
 
-    /** First network start after the mask is lifted (or right after pairing). */
+    /** First network start at startup (or right after pairing). */
     private void bootNetwork() {
         if (netBooted) {   // already woke up before - just restore the ping
             if (pingTimer == null) startPingTimer();
@@ -831,25 +925,25 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
         // Normal start: sound (permission is asked once), splash, ping, models
         new Thread(new Runnable() {
             public void run() {
-                final int myEpoch = reqEpoch;   // panic during boot = reqEpoch grows
+                final int myEpoch = reqEpoch;   // cancel during boot = reqEpoch grows
                 try {
-                    initAudioPlayer();
+                    if (Features.on(Features.VOICE)) initAudioPlayer();   // mic permission only if voice is on
                 } catch (Exception e) {}
                 try { Thread.sleep(1500); } catch (Exception e) {}
-                if (myEpoch != reqEpoch) return;   // panic in the meantime - do not wake the network
+                if (myEpoch != reqEpoch) return;   // cancel in the meantime - do not wake the network
                 home.hideSplash();
                 refreshHomeTiles();
                 // Start STRICTLY in order: ping -> /api/models -> /api/update, and only
                 // then the ping timer. Simultaneous requests to one backend arrived
                 // with X-Cnt numbers out of order -> the server rejected them as a replay
-                // (user actions do NOT abort the queue - only panic does; the timer
+                // (user actions do NOT abort the queue - only cancel does; the timer
                 // always starts, otherwise the ping would not come alive until the next unlock)
                 try { pingTick(); } catch (Exception e) {}
                 // Both requests go to Claude: the user is already in the TG section - do not occupy the channel
                 // (models are refreshed anyway when the model picker opens)
-                if (unlocked && activePanel != PANEL_TG) loadModels(false, true);
-                if (unlocked && activePanel != PANEL_TG) checkUpdateSilent(true);
-                if (unlocked && pingTimer == null) startPingTimer(5000);
+                if (active && activePanel != PANEL_TG) loadModels(false, true);
+                if (active && activePanel != PANEL_TG) checkUpdateSilent(true);
+                if (active && pingTimer == null) startPingTimer(5000);
             }
         }).start();
     }
@@ -887,7 +981,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                 } catch (Exception e) {
                     err = httpError(e);
                 }
-                if (myEpoch != reqEpoch || !unlocked) return;
+                if (myEpoch != reqEpoch || !active) return;
                 terminal.stopSpinner();
                 isLoading = false;
                 if (err != null) {
@@ -921,7 +1015,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                 } catch (Exception e) {
                     err = httpError(e);
                 }
-                if (myEpoch != reqEpoch || !unlocked) return;
+                if (myEpoch != reqEpoch || !active) return;
                 terminal.stopSpinner();
                 isLoading = false;
                 if (id == null || key == null) {
@@ -969,7 +1063,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                 } catch (Exception e) {
                     err = httpError(e);
                 }
-                if (myEpoch != reqEpoch || !unlocked) return;
+                if (myEpoch != reqEpoch || !active) return;
                 terminal.stopSpinner();
                 isLoading = false;
                 if (key == null) {
@@ -1020,75 +1114,6 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
             if (os != null) try { os.close(); } catch (Exception e) {}
             if (conn != null) try { conn.close(); } catch (Exception e) {}
         }
-    }
-
-    /** Star on the home screen: the same full lock as panic, but the input draft is kept. */
-    public void onHomeSnake() {
-        enterMask(true);
-    }
-
-    /**
-     * PANIC: a held 0 key on any screen of the unlocked mode.
-     * Instant and silent: the snake mask instead of the application, all network and UI
-     * tails are reset, no confirmations. The state becomes "locked":
-     * back only by entering the code (onSnakeUnlock wakes the network via the
-     * netBooted branch, without rebooting from scratch).
-     */
-    public void onPanicHold() {
-        enterMask(false);   // panic: typed input is discarded
-    }
-
-    /**
-     * Common cleanup for "hide" (*) and panic (0): snake mask,
-     * unlocked=false - an incoming call no longer reveals the application,
-     * back only by code. Workers are cut off by the epoch, the connection is closed,
-     * recording stops without commit. keepDraft - keep the text from the input.
-     */
-    private void enterMask(boolean keepDraft) {
-        unlocked = false;                 // locked until the code is entered on the snake
-        reqEpoch++;                       // workers die silently, the response is not drawn
-        isLoading = false;
-        autoRefreshing = false;            // background Telegram chat refresh is released too
-        final HttpConnection dead = activeConn;
-        activeConn = null;
-        if (pingTimer != null) { pingTimer.cancel(); pingTimer = null; }
-        synchronized (recLock) { isRecording = false; }   // the recording timer dies by itself
-        audioStream = null;
-        try { display.vibrate(0); } catch (Exception e) {}   // stop any running vibration
-        terminal.resetTransient();        // spinner, star, voice banners
-        home.resetPanic();                // the home screen has its own 0-repeat block
-        if (settingsHub != null) settingsHub.resetPanic();
-        if (settingsMenu != null) settingsMenu.resetPanic();
-        if (menuList != null) menuList.resetPanic();
-        if (sessionsList != null) sessionsList.resetPanic();
-        if (tgList != null) tgList.resetPanic();
-        if (serversList != null) serversList.resetPanic();
-        if (modelsList != null) modelsList.resetPanic();
-        setNormalCommands();
-        home.closeOverlay();
-        home.hideSplash();
-        activePanel = PANEL_NONE;
-        if (tgMode) {
-            tgMode = false; tgChatId = ""; tgTitle = "";
-            chatOwner = PANEL_NONE;
-            lastShownTgId = 0;
-        }
-        if (display.getCurrent() == inputCanvas) {
-            if (keepDraft && inputPurpose == IP_CHAT) chatDraft = inputCanvas.getText();
-            inputCanvas.hardReset();
-        }
-        display.setCurrent(snake);
-        // Heavy work goes to the background (as in onStopRequest): close the connection and
-        // stop recording WITHOUT commit - data is discarded. The Player is NOT closed:
-        // recreating it triggers a system "allow microphone?" dialog in the middle of
-        // a conversation - the permission is already granted in this session, the engine stays alive
-        new Thread(new Runnable() {
-            public void run() {
-                if (dead != null) { try { dead.close(); } catch (Exception e) {} }
-                try { if (recordControl != null) recordControl.stopRecord(); } catch (Exception e) {}
-                try { if (audioPlayer != null) audioPlayer.stop(); } catch (Exception e) {}
-            }
-        }).start();
     }
 
     /** Single point of session change - mirrors into the per-panel copy. */
@@ -1154,11 +1179,11 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
 
     /** Quiet version check at startup: newer -> one line, no browser. */
     private void checkUpdateSilent(boolean sync) {
-        if (!unlocked) return;
+        if (!active) return;
         final int myEpoch = reqEpoch;
         Runnable job = new Runnable() {
             public void run() {
-                if (myEpoch != reqEpoch || !unlocked) return;   // panic between start and thread
+                if (myEpoch != reqEpoch || !active) return;   // cancel between start and thread
                 try {
                     HttpConnection conn = openSigned(fullServerUrl() + "/api/update", "GET", null);
                     int code = conn.getResponseCode();
@@ -1170,7 +1195,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                     }
                     conn.close();
                     String v = extractField(json, "version");
-                    if (myEpoch != reqEpoch || !unlocked) return;   // no hint is drawn under the mask
+                    if (myEpoch != reqEpoch || !active) return;   // the app is stopping: draw nothing
                     if (v != null && v.length() > 0 && !v.equals(APP_VERSION)) {
                         home.setUpdateHint("+ v" + v);
                     }
@@ -1183,11 +1208,11 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
     /** Refresh the model list from the server (/api/models). Quiet: on failure the
      * previous one stays. menu=true - the model picker is open: when a list arrives, rebuild the menu. */
     private void loadModels(final boolean menu, boolean sync) {
-        if (!unlocked) return;
+        if (!active) return;
         final int myEpoch = reqEpoch;
         Runnable job = new Runnable() {
             public void run() {
-                if (myEpoch != reqEpoch || !unlocked) return;   // panic between start and thread
+                if (myEpoch != reqEpoch || !active) return;   // cancel between start and thread
                 try {
                     HttpConnection conn = openSigned(fullServerUrl() + "/api/models", "GET", null);
                     int code = conn.getResponseCode();
@@ -1214,7 +1239,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                         labels.addElement(unescapeJson(json.substring(l1, l2)));
                         sf = l2 + 1;
                     }
-                    if (myEpoch != reqEpoch || !unlocked || ids.size() == 0) return;
+                    if (myEpoch != reqEpoch || !active || ids.size() == 0) return;
                     final String[] nid = new String[ids.size()];
                     final String[] nlb = new String[ids.size()];
                     for (int i = 0; i < ids.size(); i++) {
@@ -1225,7 +1250,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                     // Apply on the UI thread: menu/header read the lists from there
                     display.callSerially(new Runnable() {
                         public void run() {
-                            if (myEpoch != reqEpoch || !unlocked) return;   // do not touch the screen under the mask
+                            if (myEpoch != reqEpoch || !active) return;   // the app is stopping: do not touch the screen
                             applyModels(nid, nlb, def, menu);
                         }
                     });
@@ -1460,10 +1485,17 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
         }
         if (d == settingsHub) {
             if (c == backCmd) { goHome(); return; }
-            int i = settingsHub.getSelectedIndex();
-            if (i == 0) { rebuildSettingsMenu(); display.setCurrent(settingsMenu); }
-            else if (i == 1) showServersList();
+            String it = settingsHub.getString(settingsHub.getSelectedIndex());
+            if (it.equals(Strings.params())) { rebuildSettingsMenu(); display.setCurrent(settingsMenu); }
+            else if (it.equals(Strings.features())) showFeaturesMenu();
+            else if (it.equals(Strings.servers())) showServersList();
             else { display.setCurrent(terminal); checkForUpdate(); }
+            return;
+        }
+        if (d == featuresMenu) {
+            if (c == backCmd) { showSettingsHub(); return; }
+            if (c == saveCmd) { saveFeatures(); return; }
+            toggleFeature(featuresMenu.getSelectedIndex());
             return;
         }
         if (d == settingsMenu) {
@@ -1585,12 +1617,14 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
             menuList.append(Strings.home());
         } else {
             menuList.append(Strings.newChat());
-            menuList.append(Strings.sessions());
+            if (Features.on(Features.SESSIONS)) menuList.append(Strings.sessions());
             menuList.append(Strings.model());
             menuList.append(Strings.clear());
             menuList.append(Strings.help());
-            menuList.append(Strings.keyRotate());
-            menuList.append(Strings.relink());
+            if (Features.on(Features.ADVANCED)) {
+                menuList.append(Strings.keyRotate());
+                menuList.append(Strings.relink());
+            }
             menuList.append(Strings.home());
             menuList.append(Strings.exit());
         }
@@ -1709,10 +1743,9 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
     }
 
     private void loadSessions() {
-        // Mask guard: the session-delete worker calls loadSessions() AFTER panic
-        // (isLoading was reset there) - without this line the terminal with the conversation surfaced
-        // over the snake together with the spinner
-        if (isLoading || !unlocked) return;
+        // Guard: the session-delete worker calls loadSessions() AFTER cancel
+        // (isLoading was reset there) - without this line a stale list could surface
+        if (isLoading || !active) return;
         if ("tg".equals(serverMode)) {
             display.setCurrent(terminal);
             terminal.addLine(Strings.claudeOffHere(), TerminalCanvas.COLOR_ERROR);
@@ -1798,8 +1831,8 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
         }
         display.callSerially(new Runnable() {
             public void run() {
-                if (myEpoch != reqEpoch || !unlocked) return;   // panic - do not push the list out
-                sessionsList = new MenuCanvas(SnakeMIDlet.this, Strings.sessions());
+                if (myEpoch != reqEpoch || !active) return;   // cancel - do not push the list out
+                sessionsList = new MenuCanvas(VibeNokiaMIDlet.this, Strings.sessions());
                 if (sessionIds.length == 0) {
                     sessionsList.append(Strings.noSessions());
                 } else {
@@ -1811,7 +1844,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                 sessionsList.addCommand(openItemCmd);
                 sessionsList.addCommand(delCmd);
                 sessionsList.addCommand(backCmd);
-                sessionsList.setCommandListener(SnakeMIDlet.this);
+                sessionsList.setCommandListener(VibeNokiaMIDlet.this);
                 display.setCurrent(sessionsList);
             }
         });
@@ -1830,7 +1863,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
     private void switchToSession(final String sid, final String name) {
         if (isLoading) return;
         // The epoch is taken AT SUBMISSION (like other workers) and grows immediately:
-        // panic/stop after this moment honestly kills the worker - no race
+        // cancel/stop after this moment honestly kills the worker - no race
         final int myEpoch = ++reqEpoch;
         Thread t = new Thread(new Runnable() {
             public void run() {
@@ -1851,7 +1884,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                 final String json = result;
                 display.callSerially(new Runnable() {
                     public void run() {
-                        if (myEpoch != reqEpoch) return;   // panic - do not show the terminal
+                        if (myEpoch != reqEpoch) return;   // cancel - do not show the terminal
                         if (json == null) {
                             terminal.addLine(Strings.getLang() == 0 ? "сессия не открылась"
                                                                     : "session failed",
@@ -1908,7 +1941,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                     doPost(serverUrl + "/api/sessions/delete", "{\"session_id\":\"" + escapeJson(sid) + "\"}");
                     if (sid.equals(sessionId)) setSession("");
                 } catch (Exception e) {}
-                if (myEpoch != reqEpoch || !unlocked) return;   // panic: do not reload the list
+                if (myEpoch != reqEpoch || !active) return;   // cancel: do not reload the list
                 loadSessions();
             }
         });
@@ -2074,7 +2107,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
 
     /** One-off ping: shows whether the server is alive and what it can do. */
     private void pingServerNow() {
-        if (!unlocked) return;              // under the mask the air stays silent
+        if (!active) return;              // when stopped the air stays silent
         final int myEpoch = reqEpoch;
         // The role is fixed at start: the result is shown only if the section has not changed
         final String startUrl = serverUrl;
@@ -2084,13 +2117,13 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                 // one ping at a time: wait until the timer releases the connection
                 boolean got = false;
                 for (int i = 0; i < 40; i++) {
-                    if (myEpoch != reqEpoch || !unlocked) return;
+                    if (myEpoch != reqEpoch || !active) return;
                     if (beginPing()) { got = true; break; }
                     try { Thread.sleep(200); } catch (Exception ie) { break; }
                 }
                 if (!got) {
                     // the background check holds the connection longer than 8 s - do not stay silent
-                    if (myEpoch != reqEpoch || !unlocked) return;
+                    if (myEpoch != reqEpoch || !active) return;
                     if (isTgRoleUrl(serverUrl) == full) return;   // the section is already of another role
                     terminal.addLine("  " + (Strings.getLang() == 0
                         ? "Проверка связи уже идёт..." : "Connection check in progress..."),
@@ -2111,7 +2144,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                     if (code == 200) {
                         answered = first;
                         if (full) { fullFails = 0; fullDown = false; }
-                    } else if (full && !pingAborted && myEpoch == reqEpoch && unlocked) {
+                    } else if (full && !pingAborted && myEpoch == reqEpoch && active) {
                         String sw = failoverFull(first, myEpoch, body);
                         if (sw != null) { answered = sw; code = 200; }
                     }
@@ -2120,7 +2153,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                     endPing();
                 }
                 // aborted by a user request - stay silent, this is not "server unavailable"
-                if (aborted || myEpoch != reqEpoch || !unlocked) return;
+                if (aborted || myEpoch != reqEpoch || !active) return;
                 // while the ping ran the user moved to a section of another role - do not touch a foreign header
                 if (isTgRoleUrl(serverUrl) == full) return;
                 terminal.setServerOnline(code == 200);
@@ -2237,9 +2270,9 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
 
     /** Bot contact list: those who wrote to the bot + manually added. */
     private void loadTgContacts() {
-        // Same guard as in loadSessions: "added/deleted a contact" + panic
-        // during the request raised the contacts screen over the mask
-        if (isLoading || !unlocked) return;
+        // Same guard as in loadSessions: "added/deleted a contact" + cancel
+        // during the request raised the contacts screen again
+        if (isLoading || !active) return;
         isLoading = true;
         final int myEpoch = ++reqEpoch;
         display.setCurrent(terminal);
@@ -2332,8 +2365,8 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
     private void showTgContactsList(final boolean enabled, final int myEpoch) {
         display.callSerially(new Runnable() {
             public void run() {
-                if (myEpoch != reqEpoch || !unlocked) return;   // panic - do not push the list out
-                tgList = new MenuCanvas(SnakeMIDlet.this, Strings.contacts());
+                if (myEpoch != reqEpoch || !active) return;   // cancel - do not push the list out
+                tgList = new MenuCanvas(VibeNokiaMIDlet.this, Strings.contacts());
                 if (!enabled) {
                     tgList.append(Strings.tgOff());
                 } else if (tgIds.length == 0) {
@@ -2352,7 +2385,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                 tgList.addCommand(addCmd);
                 tgList.addCommand(delCmd);
                 tgList.addCommand(backCmd);
-                tgList.setCommandListener(SnakeMIDlet.this);
+                tgList.setCommandListener(VibeNokiaMIDlet.this);
                 display.setCurrent(tgList);
             }
         });
@@ -2404,12 +2437,12 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                                 + escapeJson(name.length() > 0 ? name : cid) + "\"}";
                     doPost(serverUrl + "/api/tg/contacts/add", body);
                 } catch (Exception e) {
-                    if (myEpoch != reqEpoch || !unlocked) return;   // panic: do not write into the hidden terminal
+                    if (myEpoch != reqEpoch || !active) return;   // cancelled: do not write into the terminal
                     String em = e.getMessage();
                     terminal.addLine("ERR: " + (em == null || em.length() == 0 ? e.getClass().getName() : em),
                                      TerminalCanvas.COLOR_ERROR);
                 }
-                if (myEpoch != reqEpoch || !unlocked) return;
+                if (myEpoch != reqEpoch || !active) return;
                 loadTgContacts();
             }
         });
@@ -2424,10 +2457,10 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                     doPost(serverUrl + "/api/tg/contacts/delete", "{\"chat_id\":\"" + escapeJson(cid) + "\"}");
                     // the contact with whom the chat is open was deleted - leave TG mode completely,
                     // otherwise a dead screen remains where one can neither send nor refresh
-                    if (myEpoch != reqEpoch || !unlocked) return;   // under the mask do not send the user home
+                    if (myEpoch != reqEpoch || !active) return;   // stopped: do not send the user home
                     if (cid.equals(tgChatId)) goHome();
                 } catch (Exception e) {}
-                if (myEpoch != reqEpoch || !unlocked) return;
+                if (myEpoch != reqEpoch || !active) return;
                 loadTgContacts();
             }
         });
@@ -2453,7 +2486,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
     private volatile boolean pingBusy = false;        // a ping is holding the connection right now
 
     private void loadTgMessages(final boolean withHints) {
-        if (isLoading || autoRefreshing || tgChatId.length() == 0 || !unlocked) return;
+        if (isLoading || autoRefreshing || tgChatId.length() == 0 || !active) return;
         final int myEpoch = reqEpoch;
         // A manual refresh blocks input and spins the spinner; a BACKGROUND one is quiet:
         // it does not touch isLoading, otherwise it ate the typed message and the buttons
@@ -2474,12 +2507,12 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                     json = readUTF8(is);
                     is.close();
                 } catch (Exception e) {
-                    if (withHints && myEpoch == reqEpoch && unlocked)
+                    if (withHints && myEpoch == reqEpoch && active)
                         terminal.addLine(httpError(e), TerminalCanvas.COLOR_ERROR);
                 } finally {
                     if (conn != null) try { conn.close(); } catch (Exception ce) {}
                 }
-                if (myEpoch != reqEpoch || !unlocked) {   // panic: release the flags, do not touch the screen
+                if (myEpoch != reqEpoch || !active) {   // cancel: release the flags, do not touch the screen
                     if (withHints) { isLoading = false; terminal.stopSpinner(); }
                     else autoRefreshing = false;
                     return;
@@ -2588,10 +2621,10 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                 try {
                     terminal.startSpinner(Strings.sending());
                     waitNetIdle();
-                    if (myEpoch != reqEpoch) return;   // panic while waiting for the network
+                    if (myEpoch != reqEpoch) return;   // cancel while waiting for the network
                     final String endpoint = serverUrl + "/api/tg/voice";   // ONCE: the connection address and the signature (X-Host) must match
                     conn = (HttpConnection) Connector.open(endpoint);
-                    activeConn = conn;   // volatile: panic will close even this connection
+                    activeConn = conn;   // volatile: cancel will close even this connection
                     if (myEpoch != reqEpoch) {           // died while opening
                         try { conn.close(); } catch (Exception ce) {}
                         activeConn = null;
@@ -2679,9 +2712,9 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                         terminal.addLine(Strings.getLang() == 0 ? "запускаю установку..." : "starting install...", TerminalCanvas.COLOR_DIM);
                         terminal.repaint();
                         try { Thread.sleep(500); } catch (Exception e) {}
-                        // A 500 ms pause is a window for panic: without a re-check
-                        // the system JAD installer opened over the mask
-                        if (myEpoch != reqEpoch || !unlocked) return;
+                        // A 500 ms pause is a window for cancel: without a re-check
+                        // the system JAD installer opened after a cancel
+                        if (myEpoch != reqEpoch || !active) return;
                         boolean mustExit = platformRequest(jadUrl);
                         // The installer cannot replace a running app: if the platform
                         // requires exit - save and close, otherwise the installation hangs
@@ -2742,8 +2775,8 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                     if (myEpoch != reqEpoch) return;   // cancelled/switched - do not touch the screen
                     terminal.stopSpinner();
                     // a long reply has matured - vibrate gently so it is not missed.
-                    // unlocked guard: the worker may have survived into the mask - vibration is forbidden
-                    if (System.currentTimeMillis() - t0 > 8000 && unlocked) {
+                    // active guard: the worker may have outlived the app - no vibration then
+                    if (System.currentTimeMillis() - t0 > 8000 && active) {
                         try { display.vibrate(200); } catch (Exception ve) {}
                     }
                     showActions(result);
@@ -2779,6 +2812,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
     // --- VOICE ---
 
     private void startRecording() {
+        if (!Features.on(Features.VOICE)) return;
         if (isRecording || isLoading) return;
         // IMPORTANT: NOT on the key thread - the microphone permission popup cannot
         // be drawn there, and J9 interrupts the recording call ("Interrupted while waiting")
@@ -2786,7 +2820,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
     }
 
     private void doStartRecording() {
-        final int myEpoch = reqEpoch;   // panic can wedge into microphone initialization
+        final int myEpoch = reqEpoch;   // cancel can wedge into microphone initialization
         synchronized (recLock) {
             if (isRecording || isLoading) return;
             isRecording = true;
@@ -2800,7 +2834,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
             recordControl.startRecord();
             audioPlayer.start();
 
-            // Panic fired while the microphone was initializing: silently give the
+            // Cancel fired while the microphone was initializing: silently give the
             // microphone back (without commit), do not show the REC banner and commands.
             // The Player is NOT closed: recreating it triggers the system microphone dialog
             if (myEpoch != reqEpoch) {
@@ -2833,7 +2867,7 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
             synchronized (recLock) { isRecording = false; }
             audioStream = null;
             closePlayer();   // a broken engine will be recreated on the next recording
-            if (myEpoch != reqEpoch) return;   // panic: do not write the error into the hidden terminal
+            if (myEpoch != reqEpoch) return;   // cancelled: do not write the error into the terminal
             terminal.setVoiceState(TerminalCanvas.VOICE_NONE, 0);
             setNormalCommands();
             terminal.addLine(Strings.getLang() == 0 ? "гс: сбой записи, попробуй ещё"
@@ -2907,10 +2941,10 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
                     // Upload audio -> server does Whisper + Claude in one shot
                     terminal.startSpinner(Strings.sending());
                     waitNetIdle();
-                    if (myEpoch != reqEpoch) return;   // panic while waiting for the network
+                    if (myEpoch != reqEpoch) return;   // cancel while waiting for the network
                     final String endpoint = serverUrl + "/api/voice";   // ONCE: the connection address and the signature (X-Host) must match
                     conn = (HttpConnection) Connector.open(endpoint);
-                    activeConn = conn;   // volatile: panic will close even this connection
+                    activeConn = conn;   // volatile: cancel will close even this connection
                     if (myEpoch != reqEpoch) {           // died while opening
                         try { conn.close(); } catch (Exception ce) {}
                         activeConn = null;
@@ -3061,13 +3095,13 @@ public class SnakeMIDlet extends MIDlet implements CommandListener {
 
     private String doPostTracked(String endpoint, String jsonBody, int myEpoch) throws IOException {
         waitNetIdle();   // do not collide with an in-flight ping over the only connection
-        if (myEpoch != reqEpoch) throw new IOException("stale");   // panic while waiting
+        if (myEpoch != reqEpoch) throw new IOException("stale");   // cancel while waiting
         HttpConnection conn = null;
         InputStream is = null;
         OutputStream os = null;
         try {
             conn = (HttpConnection) Connector.open(endpoint);
-            activeConn = conn;   // volatile: panic will close even this connection
+            activeConn = conn;   // volatile: cancel will close even this connection
             if (myEpoch != reqEpoch) throw new IOException("stale");   // died while opening
             conn.setRequestMethod(HttpConnection.POST);
             conn.setRequestProperty("Content-Type", "application/json");

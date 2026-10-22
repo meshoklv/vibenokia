@@ -13,14 +13,12 @@ Findings from building the client. "Observed" = seen on the developer's own hand
 | Crypto | CLDC has no crypto. SHA-256 and HMAC are implemented by hand in `Crypto.java`. |
 | Lists/forms | `List`/`Form` do not deliver `keyRepeated`, so everything is a custom `Canvas`. |
 | Voice | JSR-135 audio capture to AMR (~1.5 KB/s); the server converts and transcribes it. |
-| Side-loading | Via a `.jad`/`.jar` pair from the memory card, or over the air from `/ota/Snake.jad`. |
+| Side-loading | Via a `.jad`/`.jar` pair from the memory card, or over the air from `/ota/VibeNokia.jad`. |
 
-## Stealth mode
+## UI model
 
-The app installs as **Snake** (vendor "Mobile Apps") and opens on a playable Snake game.
-This is a cosmetic disguise, not a security boundary (real auth is the per-device key).
-
-- Unlock: on the Snake screen type `8 9 1 4 5 6 1 9 1 1 1`. The sequence is derived from the
-  level table `LVL_TAB` in `SnakeCanvas.java`; change that table to change the code (it also drives game speed).
-- Panic: hold `0` on any screen to jump back to the game and drop in-flight requests;
-  `*` on the home screen does the same but keeps the unsent draft.
+- The home screen is a stack of tiles (`HomeCanvas`). Simple mode shows *Claude* and *Settings*;
+  *Telegram*, *OpenCode* and *Sessions* are added by the switches in Settings > Features.
+- Feature switches live in `Features.java` (bit mask, RMS store `features`). A feature is visible only if
+  the user enabled it **and** the server allows it (`VIBENOKIA_FEATURES`, delivered in the `/ping` reply).
+- Digits open tiles by their position on screen (1, 2, 3, 4, 6); `5`/OK opens the selected tile.

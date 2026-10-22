@@ -6,7 +6,7 @@ import java.util.Vector;
 /**
  * Text input directly on a Canvas: multitap, like on an ordinary phone.
  * Replaces Form/TextBox: they do not receive keyRepeated, and a held 0
- * (panic) while typing printed zeros instead of hiding the application.
+ * (a held key) while typing printed zeros.
  *
  * Layout: 2-9 letters (multitap, ~800 ms repeat window), 0 space,
  * 1 punctuation, # case/digits (abc -> ABC -> 123), * delete a character
@@ -28,7 +28,7 @@ public class InputCanvas extends Canvas implements CommandListener {
         "mno6", "pqrs7", "tuv8", "wxyz9"
     };
 
-    private final SnakeMIDlet midlet;
+    private final VibeNokiaMIDlet midlet;
     private final Font font;
     private final Command okCmd;
     private final Command cancelCmd;
@@ -47,14 +47,13 @@ public class InputCanvas extends Canvas implements CommandListener {
     // "Clear" (C) on Nokia is code -8: MIDP has no constant for it,
     // and Canvas has no KEY_CLEAR at all (that is what broke the build)
     private static final int KEY_CLR_NOKIA = -8;
-    private boolean panicFired = false;   // held 0 has already fired (once per hold)
 
     // History of sent messages (lives in the midlet, shared); up/down scroll through it
     private final Vector history;
     private int histIdx = 0;
     private String stash = "";  // what was typed before entering the history
 
-    public InputCanvas(SnakeMIDlet midlet, Vector history) {
+    public InputCanvas(VibeNokiaMIDlet midlet, Vector history) {
         this.midlet = midlet;
         this.history = history;
         setFullScreenMode(true);
@@ -82,9 +81,6 @@ public class InputCanvas extends Canvas implements CommandListener {
             buf.append(initial.length() > maxLen ? initial.substring(0, maxLen) : initial);
         }
         mode = MODE_LOWER;
-        // on panic the display switches to the game and keyReleased(0) will not come back here -
-        // reset the flag ourselves, otherwise the next hold of 0 would not trigger panic
-        panicFired = false;
         resetPending();
         histIdx = history.size();
         stash = "";
@@ -93,11 +89,10 @@ public class InputCanvas extends Canvas implements CommandListener {
 
     public String getText() { return buf.toString(); }
 
-    /** Hard reset without saving (panic): typed text must not leak out. */
+    /** Hard reset without saving : typed text is discarded. */
     public void hardReset() {
         buf.setLength(0);
         resetPending();
-        panicFired = false;
         repaint();
     }
 
@@ -212,12 +207,6 @@ public class InputCanvas extends Canvas implements CommandListener {
     }
 
     protected void keyRepeated(int keyCode) {
-        // HELD 0 is panic: works while typing too (this is why
-        // input moved from Form to Canvas). Once per hold.
-        if (keyCode == KEY_NUM0) {
-            if (!panicFired) { panicFired = true; midlet.onPanicHold(); }
-            return;
-        }
         if (keyCode == KEY_STAR) {   // held *: clear everything typed
             buf.setLength(0);
             resetPending();
@@ -225,10 +214,6 @@ public class InputCanvas extends Canvas implements CommandListener {
         }
     }
 
-    protected void keyReleased(int keyCode) {
-        // releasing 0 clears the repeat block (if the event reaches here)
-        if (keyCode == KEY_NUM0) panicFired = false;
-    }
 
     public void commandAction(Command c, Displayable d) {
         if (c == okCmd) midlet.onInputDone(buf.toString());

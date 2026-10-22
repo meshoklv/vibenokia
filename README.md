@@ -20,6 +20,7 @@
 <p align="center">
   <a href="#quick-start">Quick start</a> ·
   <a href="#features">Features</a> ·
+  <a href="#menu-and-settings">Menu</a> ·
   <a href="#how-it-works">How it works</a> ·
   <a href="#security">Security</a> ·
   <a href="README.ru.md">Русский</a>
@@ -56,10 +57,39 @@ Because the phone is the point. A feature phone has no browser worth using, no a
 | ✈️ **Telegram** | Contacts, text and voice through your own bot, with an unread badge on the home screen |
 | 🔑 **Per-device keys** | One-time pairing code, key rotation from the phone, revoke a device from the server |
 | 🛡 **Replay-proof** | HMAC-SHA256 over method, path, counter, body hash and host; 64-request sliding window |
-| 🫥 **Stealth mode** | Installs as a Snake game; a key sequence unlocks it, holding `0` hides it instantly |
+| 🧩 **Simple by default** | Opens to two tiles (Claude, Settings); Telegram, voice, sessions and advanced tools are switches in Settings, or capped server-side |
 | 📦 **Over-the-air** | Serves its own `.jad/.jar` for install and updates |
 | 🎮 **Game catalogue** | 41 standalone MIDlets, no permissions, no network |
 | 🌍 **RU / EN** | Interface in both languages |
+
+## Menu and settings
+
+The app opens straight into a **simple menu**: *Claude* (chat) and *Settings*. Everything else is off until you turn it on, so a first-time user sees two tiles, not a cockpit.
+
+<p align="center">
+  <img src="docs/screenshots/home.png" alt="Simple home menu" width="180">
+  <img src="docs/screenshots/chat.png" alt="Chat with Claude" width="180">
+  <img src="docs/screenshots/features.png" alt="Settings > Features" width="180">
+  <img src="docs/screenshots/home-advanced.png" alt="Home with Telegram and Sessions enabled" width="180">
+</p>
+<p align="center"><sub>Simple menu, chat, Settings &gt; Features, and the menu after enabling Telegram and Sessions. Rendered in MicroEmulator at 240x320.</sub></p>
+
+**On the phone:** Settings > Features is a list of switches (OK toggles a row, *Save* applies it; the choice is kept in the phone's RMS storage).
+
+| Feature | What it adds | Default |
+|---|---|---|
+| **Telegram** | Telegram tile with unread badge, contacts, text and voice through your bot | off |
+| **OpenCode** | Second chat tile with free OpenCode models (server must run with `VIBENOKIA_OPENCODE=1`) | off |
+| **Sessions** | Session list: switch, rename, delete; also *Sessions* in the chat menu | off |
+| **Voice messages** | Hold `*` in a chat to record; asks for the microphone only when on | off |
+| **Advanced** | Servers list, in-app update, key rotation, re-pairing | off |
+
+Always available: chat, model choice (Opus / Sonnet / Haiku), new chat, language, font size.
+Tiles are numbered in the order they are shown; press the number to open one, `5`/OK opens the selected, `9` help, `0` about.
+
+**On the server:** `VIBENOKIA_FEATURES=telegram,voice,sessions` in `.env` is a ceiling for every phone. A feature missing from the list is hidden in the app (greyed out in Features) and its API routes answer 404, so a server that never uses Telegram or voice does not expose them. Default: all. The list reaches the phone in the `/ping` reply.
+
+Upgrading from a build that had no Features screen keeps everything that was visible before; a fresh install starts simple.
 
 ## Quick start
 
@@ -80,11 +110,11 @@ docker compose run --rm server claude login                              # or lo
 Build the phone app (needs Docker; it pulls a public J2ME toolchain image) and the games:
 
 ```bash
-make -C client SERVER_URL=http://your.host:8080    # -> client/dist/Snake.jar + Snake.jad
+make -C client SERVER_URL=http://your.host:8080    # -> client/dist/VibeNokia.jar + VibeNokia.jad
 ./scripts/build-games.sh                           # optional -> games/dist/
 ```
 
-Install `Snake.jad` on the phone (copy to the memory card, open it in the file manager), open the "Snake" app, type the unlock sequence from [platform notes](docs/platform-notes.md#stealth-mode), press `5` to request a pairing code, then read it on the server:
+Install `VibeNokia.jad` on the phone (copy to the memory card, open it in the file manager), open the "VibeNokia" app, press `5` to request a pairing code, then read it on the server:
 
 ```bash
 docker compose exec server cat /app/data/pair_code.txt
@@ -104,7 +134,7 @@ Needs Python 3.10+, `ffmpeg` (voice) and the `claude` CLI on `PATH`.
 </details>
 
 > [!NOTE]
-> **Tested on:** the client on a physical Nokia 3310 (2017, TA-1030) by the author during development; in this release the client and all 41 games build in the J2ME container, the server image builds and answers on loopback (403 without auth), and pairing plus signed chat were exercised end to end with the phone emulator and a stub `claude` binary.
+> **Tested on:** the client on a physical Nokia 3310 (2017, TA-1030) by the author during development; in this release the client and all 41 games build in the J2ME container (the new menu and Features screens were driven by hand in MicroEmulator, which is where the screenshots come from), the server image builds and answers on loopback (403 without auth), and pairing plus signed chat were exercised end to end with the phone emulator and a stub `claude` binary.
 > **Not yet tested on:** a real Claude call inside the published Docker image, other Series 30+/40 handsets, TLS fronts with the phone.
 
 ## How it works
@@ -135,6 +165,7 @@ Set in `.env` (see [`.env.example`](.env.example)):
 | `OPENROUTER_API_KEY`, `GROQ_API_KEY` | empty | Voice transcription |
 | `TELEGRAM_BOT_TOKEN`, `VIBENOKIA_OWNER_CHAT` | empty | Telegram bridge; send pairing codes to your chat |
 | `VIBENOKIA_OPENCODE` | `0` | Optional second engine, read the warning below |
+| `VIBENOKIA_FEATURES` | all | Features phones may enable: `telegram,opencode,sessions,voice,advanced` |
 
 ## Security
 
@@ -144,6 +175,7 @@ Set in `.env` (see [`.env.example`](.env.example)):
 - **No shell by default.** Claude runs with `--permission-mode dontAsk` and no pre-approved tools. If you allow tools via `VIBENOKIA_CLAUDE_ARGS`, a paired phone can make Claude use them, so treat a paired phone like an SSH key and keep the allow-list narrow. The server removes its own secrets from Claude's environment.
 - OpenCode (`VIBENOKIA_OPENCODE=1`) is off by default: its agents may run tools per *your* OpenCode configuration.
 - ⚠️ The channel is **not encrypted**. Prompts and answers can be read by anyone on the path. Signatures stop forgery, guessing and replay, not eavesdropping.
+- `VIBENOKIA_FEATURES` lets you shrink the attack surface: routes of features you list out (Telegram, voice) answer 404 for every phone.
 - Voice and Telegram send data to the services you configure (OpenRouter/Groq/Telegram).
 
 ## Roadmap
@@ -156,7 +188,7 @@ Set in `.env` (see [`.env.example`](.env.example)):
 
 **Will it run on my phone?** It targets CLDC 1.1 / MIDP 2.0 and was built for the Nokia 3310 (2017). Other J2ME phones may work; none are verified.
 
-**Why is it called Snake?** See stealth mode in the [platform notes](docs/platform-notes.md).
+**Where is Telegram / voice / sessions?** Hidden by default. Turn them on in Settings > Features on the phone (and make sure the server allows them: `VIBENOKIA_FEATURES`, see [Menu and settings](#menu-and-settings)).
 
 **Can I skip Claude?** The server needs the `claude` CLI for chat; Telegram and games work without it.
 

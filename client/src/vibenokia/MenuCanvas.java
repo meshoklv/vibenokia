@@ -6,19 +6,17 @@ import java.util.Vector;
 /**
  * List on a Canvas instead of List/Form.
  *
- * Why: MIDP delivers keyRepeated ONLY to Canvas screens. While the menu, contacts,
- * sessions and settings were List/Form, a held 0 (panic) never reached the
- * application there, so the most sensitive screen (contact names)
- * was not hidden. This behaves like List.IMPLICIT but is a Canvas:
+ * Why: MIDP delivers keyRepeated ONLY to Canvas screens (held up/down scrolls),
+ * and a Canvas gives full control of the look. This behaves like List.IMPLICIT:
  * arrows/2/8 select, OK/5 opens, soft keys are the same Commands that
- * used to be attached to the List, and holding 0 jumps to the game from anywhere.
+ * would be attached to a List.
  */
 public class MenuCanvas extends Canvas {
 
     private static final int PAD = 6;
     private static final int ROW_PAD = 3;
 
-    private final SnakeMIDlet midlet;
+    private final VibeNokiaMIDlet midlet;
     private final String header;
     private final Vector items = new Vector();
 
@@ -28,12 +26,11 @@ public class MenuCanvas extends Canvas {
 
     private Command selectCmd;           // what we send to the listener on OK/FIRE
     private CommandListener listener;
-    private boolean panicFired = false;  // held 0 has already fired (once per hold)
 
     private final Font fT, fS;
     private final int fhT, fhS;
 
-    public MenuCanvas(SnakeMIDlet midlet, String header) {
+    public MenuCanvas(VibeNokiaMIDlet midlet, String header) {
         this.midlet = midlet;
         this.header = header != null ? header : "";
         setFullScreenMode(true);
@@ -71,9 +68,6 @@ public class MenuCanvas extends Canvas {
         listener = l;
         super.setCommandListener(l);
     }
-
-    /** Reset the 0 repeat block - common cleanup on panic (enterMask). */
-    public void resetPanic() { panicFired = false; }
 
     // --- DRAWING ---
 
@@ -143,8 +137,6 @@ public class MenuCanvas extends Canvas {
     // --- INPUT ---
 
     protected void keyPressed(int keyCode) {
-        // short 0 does nothing: the key is reserved for panic (hold)
-        if (keyCode == KEY_NUM0) { panicFired = false; return; }
         if (keyCode == KEY_NUM2) { move(-1); return; }
         if (keyCode == KEY_NUM8) { move(1); return; }
         if (keyCode == KEY_NUM5) { fire(); return; }
@@ -155,11 +147,6 @@ public class MenuCanvas extends Canvas {
     }
 
     protected void keyRepeated(int keyCode) {
-        // HELD 0 is panic: works in the menu, contacts and settings
-        if (keyCode == KEY_NUM0) {
-            if (!panicFired) { panicFired = true; midlet.onPanicHold(); }
-            return;
-        }
         // Holding up/down scrolls the list
         if (keyCode == KEY_NUM2) { move(-1); return; }
         if (keyCode == KEY_NUM8) { move(1); return; }
@@ -168,9 +155,6 @@ public class MenuCanvas extends Canvas {
         else if (ga == DOWN) move(1);
     }
 
-    protected void keyReleased(int keyCode) {
-        if (keyCode == KEY_NUM0) panicFired = false;
-    }
 
     private void move(int delta) {
         int n = items.size();

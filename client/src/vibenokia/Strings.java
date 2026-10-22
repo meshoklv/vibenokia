@@ -107,18 +107,22 @@ public class Strings {
 
     // Главный экран
     public static String claudeTile() { return lang == EN ? "Claude" : "Клод"; }
+    public static String chatSub() { return lang == EN ? "chat with Claude" : "чат с Клодом"; }
     public static String settingsFull() { return lang == EN ? "Settings" : "Настройки"; }
     public static String sessionsSub() { return lang == EN ? "Claude & OpenCode chats" : "чаты Клода и OpenCode"; }
-    public static String settingsSub() { return lang == EN ? "language, voice, servers" : "язык, голос, серверы"; }
+    public static String settingsSub() { return lang == EN ? "language, font, features" : "язык, шрифт, функции"; }
+    public static String features() { return lang == EN ? "Features" : "Функции"; }
+    public static String featVoice() { return lang == EN ? "Voice messages" : "Голосовые"; }
+    public static String featAdvanced() { return lang == EN ? "Advanced" : "Расширенное"; }
+    public static String featServerOff() { return lang == EN ? "off on server" : "выкл. на сервере"; }
     public static String noNews() { return lang == EN ? "no new messages" : "нет новых"; }
     public static String home() { return lang == EN ? "Home" : "Домой"; }
     public static String anyKeyBack() { return lang == EN ? "any key - back" : "любая клавиша - назад"; }
     public static String params() { return lang == EN ? "Options" : "Параметры"; }
     public static String homeHelp1() { return lang == EN ? "up/down - choose, OK - open" : "вверх/вниз - выбор, OK - открыть"; }
-    public static String homeHelp2() { return lang == EN ? "1 TG  2 Claude  3 OpenCode" : "1 ТГ  2 Клод  3 OpenCode"; }
-    public static String homeHelp3() { return lang == EN ? "4 sessions  7 settings" : "4 сессии  7 настройки"; }
+    public static String homeHelp2() { return lang == EN ? "1-4,6 - open tile by number" : "1-4,6 - плитка по номеру"; }
+    public static String homeHelp3() { return lang == EN ? "Settings > Features: more" : "Настройки > Функции: ещё"; }
     public static String homeHelp4() { return lang == EN ? "in chat: 1 - home" : "в чате: 1 - домой"; }
-    public static String homeHelp5() { return lang == EN ? "* - snake game" : "* - змейка"; }
 
     // Привязка телефона
     public static String pairTitle() { return lang == EN ? "Phone is not linked yet" : "Телефон ещё не привязан"; }

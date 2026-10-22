@@ -11,5 +11,5 @@ services:
     volumes:
       - ./data:/app/data                 # database, pairing code, working dir
       - ./data/claude-home:/home/vibe    # Claude Code login state (if you use `claude login`)
-      - ./client/dist:/app/ota:ro        # Snake.jar / Snake.jad for over-the-air install
+      - ./client/dist:/app/ota:ro        # VibeNokia.jar / VibeNokia.jad for over-the-air install
       - ./games/dist:/app/games:ro       # optional game catalogue
